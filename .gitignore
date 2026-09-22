@@ -1,1 +1,64 @@
+# ---------------------------------------------------------------------
+# Environment Variables & Secrets (Kabhi commit na karein)
+# ---------------------------------------------------------------------
 .env
+.env.local
+.env.*.local
+*.env
+
+# ---------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------
+node_modules/
+package-lock.json.bak
+
+# ---------------------------------------------------------------------
+# Runtime Logs & Debugging
+# ---------------------------------------------------------------------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ---------------------------------------------------------------------
+# OS & Editor Specific Files
+# ---------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs & Editors
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ---------------------------------------------------------------------
+# Project Specific (Reports & Temporary Uploads)
+# ---------------------------------------------------------------------
+# Spec ke mutabiq Excel exports aur temporary uploads generate honge
+temp/
+tmp/
+exports/*.xlsx
+uploads/
+
+# ---------------------------------------------------------------------
+# Database / Local Backups
+# ---------------------------------------------------------------------
+# Local DB dumps ya MySQL Workbench auto-saves
+*.dump
+*.backup
+*.sql.bak
+
+# ---------------------------------------------------------------------
+# Testing & Coverage
+# ---------------------------------------------------------------------
+coverage/
+.nyc_output/
