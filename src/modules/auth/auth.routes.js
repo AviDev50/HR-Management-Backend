@@ -1,11 +1,13 @@
-import express from "express";
-import { } from "./auth.controller.js";
-import upload from "../../middlewares/upload.js";
+import { Router } from "express";
+import * as authController from "./auth.controller.js";
+import { requireAuth } from "../../middlewares/auth.js";
 
-const router = express.Router();
+const router = Router();
 
-router.get("/test", (req, res) => {
-  res.json({ message: "Auth working" });
-});
+router.post("/auth/login", authController.loginEmployee);
+router.post("/admin/auth/login", authController.loginAdmin);
+router.post("/auth/refresh-token", authController.refreshToken);
+router.post("/auth/logout", authController.logout);
+router.get("/auth/me", requireAuth, authController.getMe);
 
 export default router;
