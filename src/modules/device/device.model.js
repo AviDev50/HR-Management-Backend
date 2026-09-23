@@ -1,75 +1,152 @@
-import * as deviceModel from "./device.model.js";
+import pool from "../../config/db.js";
+import { withTransaction } from "../../utils/withTransaction.js";
 import { createError } from "../../utils/createError.js";
 
-export async function requestDeviceChangeService(employeeId, body) {
-  const { device } = body;
-  if (!device || !device.device_id || !device.platform) {
-    throw createError("VALIDATION_ERROR", 422, "Device details are required.");
-  }
+export async function findActiveDeviceByEmployeeId(employeeId) {
+  const [rows] = await pool.query(
+    `SELECT employee_device_id, employee_id, device_id, device_name, device_model, platform, status, registered_at, last_login_at
+     FROM employee_device
+     WHERE employee_id = ? AND status = 'ACTIVE' AND deleted_at IS NULL
+     LIMIT 1`,
+    [employeeId]
+  );
+  return rows[0] || null;
+}
 
-  const activeDevice = await deviceModel.findActiveDeviceByEmployeeId(employeeId);
-  if (!activeDevice) {
-    throw createError(
-      "VALIDATION_ERROR",
-      422,
-      "No active device found for this employee. Log in with this device to register it directly."
+export async function findPendingRequestByEmployeeId(employeeId) {
+  const [rows] = await pool.query(
+    `SELECT device_change_request_id, status FROM device_change_request
+     WHERE employee_id = ? AND status = 'PENDING' AND deleted_at IS NULL
+     LIMIT 1`,
+    [employeeId]
+  );
+  return rows[0] || null;
+}
+
+export async function createChangeRequest({ employeeId, oldEmployeeDeviceId, newDevice }) {
+  const [result] = await pool.query(
+    `INSERT INTO device_change_request
+       (employee_id, old_employee_device_id, new_device_id, new_device_name, new_device_model, new_platform, status)
+     VALUES (?, ?, ?, ?, ?, ?, 'PENDING')`,
+    [
+      employeeId,
+      oldEmployeeDeviceId,
+      newDevice.device_id,
+      newDevice.device_name || null,
+      newDevice.model || null,
+      newDevice.platform,
+    ]
+  );
+  return result.insertId;
+}
+
+export async function findChangeRequestById(id) {
+  const [rows] = await pool.query(
+    `SELECT * FROM device_change_request WHERE device_change_request_id = ? AND deleted_at IS NULL LIMIT 1`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
+export async function listChangeRequests({ limit, offset, status }) {
+  const conditions = ["deleted_at IS NULL"];
+  const params = [];
+  if (status) {
+    conditions.push("status = ?");
+    params.push(status);
+  }
+  const where = conditions.join(" AND ");
+
+  const [rows] = await pool.query(
+    `SELECT device_change_request_id, employee_id, old_employee_device_id, new_device_id,
+            new_device_name, new_platform, status, requested_at, reviewed_at
+     FROM device_change_request
+     WHERE ${where}
+     ORDER BY requested_at DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+
+  const [countRows] = await pool.query(
+    `SELECT COUNT(*) AS total FROM device_change_request WHERE ${where}`,
+    params
+  );
+
+  return { rows, total: countRows[0].total };
+}
+
+export async function listEmployeeDeviceHistory(employeeId) {
+  const [rows] = await pool.query(
+    `SELECT employee_device_id, device_id, device_name, device_model, platform, status, registered_at, last_login_at
+     FROM employee_device
+     WHERE employee_id = ? AND deleted_at IS NULL
+     ORDER BY registered_at DESC`,
+    [employeeId]
+  );
+  return rows;
+}
+
+/**
+ * Approves a PENDING device-change request atomically:
+ * old device -> INACTIVE, new device -> ACTIVE row inserted, request -> APPROVED.
+ * (employee_device.active_employee_id generated column + unique index
+ * guarantees only one ACTIVE row per employee even under concurrency.)
+ */
+export async function approveChangeRequest(requestId, adminId) {
+  return withTransaction(async (conn) => {
+    const [reqRows] = await conn.query(
+      `SELECT * FROM device_change_request WHERE device_change_request_id = ? AND deleted_at IS NULL FOR UPDATE`,
+      [requestId]
     );
-  }
-  if (activeDevice.device_id === device.device_id) {
-    throw createError("VALIDATION_ERROR", 422, "This device is already the active device.");
-  }
+    const request = reqRows[0];
+    if (!request) {
+      throw createError("REQUEST_NOT_FOUND", 404, "Device change request not found.");
+    }
+    if (request.status !== "PENDING") {
+      throw createError("REQUEST_ALREADY_REVIEWED", 409, "This request has already been reviewed.");
+    }
 
-  const pending = await deviceModel.findPendingRequestByEmployeeId(employeeId);
-  if (pending) {
-    throw createError("DEVICE_CHANGE_PENDING", 409, "A device change request is already pending approval.");
-  }
+    await conn.query(
+      `UPDATE employee_device SET status = 'INACTIVE' WHERE employee_device_id = ?`,
+      [request.old_employee_device_id]
+    );
 
-  const requestId = await deviceModel.createChangeRequest({
-    employeeId,
-    oldEmployeeDeviceId: activeDevice.employee_device_id,
-    newDevice: device,
+    const [insertResult] = await conn.query(
+      `INSERT INTO employee_device (employee_id, device_id, device_name, device_model, platform, status, registered_at, last_login_at)
+       VALUES (?, ?, ?, ?, ?, 'ACTIVE', NOW(), NOW())`,
+      [request.employee_id, request.new_device_id, request.new_device_name, request.new_device_model, request.new_platform]
+    );
+
+    await conn.query(
+      `UPDATE device_change_request
+       SET status = 'APPROVED', reviewed_by_admin_id = ?, reviewed_at = NOW()
+       WHERE device_change_request_id = ?`,
+      [adminId, requestId]
+    );
+
+    return insertResult.insertId;
   });
-
-  return deviceModel.findChangeRequestById(requestId);
 }
 
-export async function getDeviceStatusService(employeeId) {
-  const activeDevice = await deviceModel.findActiveDeviceByEmployeeId(employeeId);
-  const pendingRequest = await deviceModel.findPendingRequestByEmployeeId(employeeId);
+export async function rejectChangeRequest(requestId, adminId, reason) {
+  return withTransaction(async (conn) => {
+    const [reqRows] = await conn.query(
+      `SELECT * FROM device_change_request WHERE device_change_request_id = ? AND deleted_at IS NULL FOR UPDATE`,
+      [requestId]
+    );
+    const request = reqRows[0];
+    if (!request) {
+      throw createError("REQUEST_NOT_FOUND", 404, "Device change request not found.");
+    }
+    if (request.status !== "PENDING") {
+      throw createError("REQUEST_ALREADY_REVIEWED", 409, "This request has already been reviewed.");
+    }
 
-  return {
-    active_device: activeDevice || null,
-    pending_request: pendingRequest || null,
-  };
-}
-
-export async function listChangeRequestsService(query) {
-  const page = Math.max(parseInt(query.page, 10) || 1, 1);
-  const limit = Math.min(Math.max(parseInt(query.limit, 10) || 20, 1), 100);
-  const offset = (page - 1) * limit;
-
-  const { rows, total } = await deviceModel.listChangeRequests({
-    limit,
-    offset,
-    status: query.status || null,
+    await conn.query(
+      `UPDATE device_change_request
+       SET status = 'REJECTED', reviewed_by_admin_id = ?, reviewed_at = NOW(), rejection_reason = ?
+       WHERE device_change_request_id = ?`,
+      [adminId, reason || null, requestId]
+    );
   });
-
-  return {
-    items: rows,
-    pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
-  };
-}
-
-export async function listEmployeeDeviceHistoryService(employeeId) {
-  return deviceModel.listEmployeeDeviceHistory(employeeId);
-}
-
-export async function approveChangeRequestService(requestId, adminId) {
-  await deviceModel.approveChangeRequest(requestId, adminId);
-  return deviceModel.findChangeRequestById(requestId);
-}
-
-export async function rejectChangeRequestService(requestId, adminId, reason) {
-  await deviceModel.rejectChangeRequest(requestId, adminId, reason);
-  return deviceModel.findChangeRequestById(requestId);
 }
