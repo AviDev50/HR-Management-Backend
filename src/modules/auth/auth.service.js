@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import * as authModel from "./auth.model.js";
+import * as deviceModel from "../device/device.model.js";
 import { signAccessToken } from "../../utils/jwt.js";
 import { generateRefreshToken, hashRefreshToken } from "../../utils/token.js";
 import { createError } from "../../utils/createError.js";
@@ -46,11 +47,23 @@ export async function loginEmployeeService(body) {
     // same device logging in again -> allowed
     await authModel.touchDeviceLastLogin(activeDevice.employee_device_id);
   } else {
-    // different device -> blocked until admin-approved device-change request
+    // different device -> blocked until admin-approved device-change request.
+    // Employee can never provide the NEW device's info from the OLD device,
+    // so login itself raises the request using the device info this call
+    // just received (from the new device attempting to log in).
+    const alreadyPending = await deviceModel.findPendingRequestByEmployeeId(employee.employee_id);
+    if (!alreadyPending) {
+      await deviceModel.createChangeRequest({
+        employeeId: employee.employee_id,
+        oldEmployeeDeviceId: activeDevice.employee_device_id,
+        newDevice: device,
+      });
+    }
+
     throw createError(
       "DEVICE_NOT_AUTHORIZED",
       403,
-      "This employee is already registered on another device. Admin approval is required to change the device."
+      "This employee is already registered on another device. A device-change request has been raised and is pending admin approval."
     );
   }
 
