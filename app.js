@@ -4,8 +4,8 @@ import authRoutes from "./src/modules/auth/auth.routes.js";
 import employeeRoutes from "./src/modules/employee/employee.routes.js";
 import deviceRoutes from "./src/modules/device/device.routes.js";
 import attendanceRoutes from "./src/modules/attendance/attendance.routes.js";
-// import leaveRoutes from "./src/modules/leave/leave.routes.js";
-// import holidayRoutes from "./src/modules/holiday/holiday.routes.js";
+import leaveRoutes from "./src/modules/leave/leave.routes.js";
+import holidayRoutes from "./src/modules/holiday/holiday.routes.js";
 import { errorHandler } from "./src/middlewares/errorHandler.js";
 
 const app = express();
@@ -20,8 +20,8 @@ app.use("/api", authRoutes);
 app.use("/api", employeeRoutes);
 app.use("/api", deviceRoutes);
 app.use("/api", attendanceRoutes);
-// app.use("/api", leaveRoutes);
-// app.use("/api", holidayRoutes);
+app.use("/api", leaveRoutes);
+app.use("/api", holidayRoutes);
 
 // must be registered LAST, after all routes
 app.use(errorHandler);
