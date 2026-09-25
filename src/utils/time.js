@@ -13,6 +13,11 @@ export function getWeekdayAbbrev(date = new Date()) {
   return WEEKDAY_NAMES[ist.getUTCDay()];
 }
 
+export function getWeekdayAbbrevForDateString(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  return WEEKDAY_NAMES[d.getUTCDay()];
+}
+
 /**
  * Combines an IST calendar date ("YYYY-MM-DD") with an IST wall-clock time
  * ("HH:MM" or "HH:MM:SS", e.g. employee.expected_login_time) and returns
