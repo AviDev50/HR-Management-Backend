@@ -151,7 +151,14 @@ export async function checkOutService(employeeId, body) {
   const attendanceDate = getISTDateString(new Date());
   const existing = await attendanceModel.findAttendanceByEmployeeDate(employeeId, attendanceDate);
 
-  if (!existing || existing.status !== "CHECKED_IN") {
+  // if (!existing || existing.status !== "CHECKED_IN") {
+  //   throw createError("CHECKIN_REQUIRED", 409, "No open check-in found for today.");
+  // }
+  // ============================================================================
+  // [CHANGE 1]: Check add kiya gaya hai ki check-in status ke sath actual_check_in
+  // value DB record me maujood hai ya nahi
+  // ============================================================================
+  if (!existing || existing.status !== "CHECKED_IN" || !existing.actual_check_in) {
     throw createError("CHECKIN_REQUIRED", 409, "No open check-in found for today.");
   }
 
@@ -160,7 +167,14 @@ export async function checkOutService(employeeId, body) {
   const now = new Date();
   const expectedLogoutUtc = istDateTimeToUtcDate(attendanceDate, existing.expected_logout_time);
   const earlyMinutes = Math.max(0, diffInMinutes(expectedLogoutUtc, now));
+  // const checkInUtc = parseDbDatetimeUtc(existing.actual_check_in);
+  // ============================================================================
+  // [CHANGE 2]: Safe parseDbDatetimeUtc call + parse fail hone par structured error handling
+  // ============================================================================
   const checkInUtc = parseDbDatetimeUtc(existing.actual_check_in);
+  if (!checkInUtc) {
+    throw createError("VALIDATION_ERROR", 500, "Unable to calculate checkout: invalid check-in timestamp.");
+  }
   const workedMinutes = Math.max(0, diffInMinutes(now, checkInUtc));
 
   await attendanceModel.updateCheckOut(existing.attendance_id, {

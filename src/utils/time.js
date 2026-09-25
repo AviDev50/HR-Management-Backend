@@ -24,13 +24,40 @@ export function istDateTimeToUtcDate(dateStr, timeStr) {
   return new Date(asIfUtc.getTime() - IST_OFFSET_MS);
 }
 
+// /**
+//  * Parses a DATETIME string coming back from mysql2 (dateStrings:true,
+//  * session timezone "+00:00") - the string represents UTC, but has no
+//  * timezone suffix, so we add one before parsing.
+//  */
+// export function parseDbDatetimeUtc(str) {
+//   return new Date(`${str.replace(" ", "T")}Z`);
+// }
+
 /**
- * Parses a DATETIME string coming back from mysql2 (dateStrings:true,
- * session timezone "+00:00") - the string represents UTC, but has no
- * timezone suffix, so we add one before parsing.
+ * Safely parses DATETIME representation into a UTC Date object.
+ * Date object, string ('YYYY-MM-DD HH:mm:ss' ya ISO), sab handle karta hai.
  */
-export function parseDbDatetimeUtc(str) {
-  return new Date(`${str.replace(" ", "T")}Z`);
+export function parseDbDatetimeUtc(val) {
+  if (!val) return null;
+
+  if (val instanceof Date) {
+    return isNaN(val.getTime()) ? null : val;
+  }
+
+  if (typeof val === "string") {
+    const formatted = val.includes("T")
+      ? (val.endsWith("Z") ? val : `${val}Z`)
+      : `${val.replace(" ", "T")}Z`;
+
+    const parsed = new Date(formatted);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  if (typeof val === "number") {
+    return new Date(val);
+  }
+
+  return null;
 }
 
 export function diffInMinutes(laterDate, earlierDate) {
