@@ -68,7 +68,7 @@ export async function loginEmployeeService(body) {
   }
 
   const accessToken = signAccessToken(
-    { id: employee.employee_id, role: "EMPLOYEE" },
+    { id: employee.employee_id, role: "EMPLOYEE", device_id: device.device_id },
     EMPLOYEE_ACCESS_EXPIRY
   );
 
@@ -140,7 +140,14 @@ export async function refreshTokenService(refreshToken) {
   }
 
   const expiry = stored.user_type === "ADMIN" ? ADMIN_ACCESS_EXPIRY : EMPLOYEE_ACCESS_EXPIRY;
-  const accessToken = signAccessToken({ id: stored.user_id, role: stored.user_type }, expiry);
+
+  const payload = { id: stored.user_id, role: stored.user_type };
+  if (stored.user_type === "EMPLOYEE") {
+    const activeDevice = await authModel.findActiveDeviceByEmployeeId(stored.user_id);
+    payload.device_id = activeDevice?.device_id || null;
+  }
+
+  const accessToken = signAccessToken(payload, expiry);
 
   return { access_token: accessToken };
 }

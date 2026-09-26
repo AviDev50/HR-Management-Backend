@@ -111,6 +111,16 @@ export async function approveChangeRequest(requestId, adminId) {
       [request.old_employee_device_id]
     );
 
+    // kill any refresh tokens issued to the old device so it can't
+    // silently mint a fresh access token either - it must log in again
+    // (and will be blocked, since it's no longer the active device)
+    await conn.query(
+      `UPDATE refresh_token
+       SET revoked_at = NOW()
+       WHERE user_type = 'EMPLOYEE' AND user_id = ? AND revoked_at IS NULL`,
+      [request.employee_id]
+    );
+
     const [insertResult] = await conn.query(
       `INSERT INTO employee_device (employee_id, device_id, device_name, device_model, platform, status, registered_at, last_login_at)
        VALUES (?, ?, ?, ?, ?, 'ACTIVE', NOW(), NOW())`,
