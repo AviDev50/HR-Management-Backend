@@ -11,6 +11,7 @@ router.post(
   requireRole("EMPLOYEE"),
   deviceController.requestDeviceChange
 );
+
 router.get("/devices/status", requireAuth, requireRole("EMPLOYEE"), deviceController.getDeviceStatus);
 
 // Admin

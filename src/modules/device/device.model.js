@@ -32,7 +32,7 @@ export async function createChangeRequest({ employeeId, oldEmployeeDeviceId, new
       employeeId,
       oldEmployeeDeviceId,
       newDevice.device_id,
-      newDevice.device_name || null,
+      newDevice.model || null,
       newDevice.model || null,
       newDevice.platform,
     ]
