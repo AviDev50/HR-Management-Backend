@@ -73,8 +73,9 @@ export async function createCheckInRow(data) {
   const [result] = await pool.query(
     `INSERT INTO attendance
        (employee_id, attendance_date, status, expected_login_time, expected_logout_time,
-        actual_check_in, late_minutes, check_in_latitude, check_in_longitude, check_in_accuracy, device_id)
-     VALUES (?, ?, 'CHECKED_IN', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        actual_check_in, late_minutes, check_in_latitude, check_in_longitude, check_in_accuracy,
+        device_id, location_type)
+     VALUES (?, ?, 'CHECKED_IN', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       data.employee_id,
       data.attendance_date,
@@ -86,6 +87,7 @@ export async function createCheckInRow(data) {
       data.longitude,
       data.accuracy,
       data.device_id,
+      data.location_type,
     ]
   );
   return result.insertId;
@@ -97,7 +99,8 @@ export async function updateExistingRowToCheckIn(attendanceId, data) {
   await pool.query(
     `UPDATE attendance
      SET status = 'CHECKED_IN', actual_check_in = ?, late_minutes = ?,
-         check_in_latitude = ?, check_in_longitude = ?, check_in_accuracy = ?, device_id = ?
+         check_in_latitude = ?, check_in_longitude = ?, check_in_accuracy = ?, device_id = ?,
+         location_type = ?
      WHERE attendance_id = ?`,
     [
       data.actual_check_in,
@@ -106,6 +109,7 @@ export async function updateExistingRowToCheckIn(attendanceId, data) {
       data.longitude,
       data.accuracy,
       data.device_id,
+      data.location_type,
       attendanceId,
     ]
   );
@@ -150,11 +154,18 @@ export async function listAttendanceHistory(employeeId, { from, to, limit, offse
   return { rows, total: countRows[0].total };
 }
 
-export async function getMonthlyAggregate(employeeId, startDate, endDate) {
+/**
+ * Aggregate counts for the monthly-summary endpoint. NOT_CHECKED_IN rows
+ * for dates already in the past are treated as absent (never checked in
+ * and the day is over) - computed here via the `todayIST` cutoff rather
+ * than stored as ABSENT, since no end-of-day cron flips that status yet.
+ */
+export async function getMonthlyAggregate(employeeId, startDate, endDate, todayIST) {
   const [rows] = await pool.query(
     `SELECT
        SUM(CASE WHEN status IN ('CHECKED_IN','CHECKED_OUT') THEN 1 ELSE 0 END) AS present_days,
-       SUM(CASE WHEN status = 'ABSENT' THEN 1 ELSE 0 END) AS absent_days,
+       SUM(CASE WHEN status = 'ABSENT' THEN 1 ELSE 0 END) AS override_absent_days,
+       SUM(CASE WHEN status = 'NOT_CHECKED_IN' AND attendance_date < ? THEN 1 ELSE 0 END) AS missed_days,
        SUM(CASE WHEN status = 'ON_LEAVE' THEN 1 ELSE 0 END) AS full_leave_days,
        SUM(CASE WHEN status = 'HALF_DAY_LEAVE' THEN 1 ELSE 0 END) AS half_leave_days,
        SUM(CASE WHEN status = 'HOLIDAY' THEN 1 ELSE 0 END) AS full_holiday_days,
@@ -166,7 +177,7 @@ export async function getMonthlyAggregate(employeeId, startDate, endDate) {
        COALESCE(SUM(worked_minutes), 0) AS total_worked_minutes
      FROM attendance
      WHERE employee_id = ? AND attendance_date BETWEEN ? AND ? AND deleted_at IS NULL`,
-    [employeeId, startDate, endDate]
+    [todayIST, employeeId, startDate, endDate]
   );
   return rows[0];
 }

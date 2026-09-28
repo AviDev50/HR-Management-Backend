@@ -1,10 +1,13 @@
 import * as attendanceModel from "./attendance.model.js";
 import * as employeeModel from "../employee/employee.model.js";
+import * as officeModel from "../office/office.model.js";
+import * as wfhModel from "../wfh/wfh.model.js";
 import { createError } from "../../utils/createError.js";
 import { haversineDistanceMeters } from "../../utils/geo.js";
 import {
   getISTDateString,
   getWeekdayAbbrev,
+  getWeekdayAbbrevForDateString,
   istDateTimeToUtcDate,
   parseDbDatetimeUtc,
   diffInMinutes,
@@ -45,7 +48,18 @@ export async function resolveNonWorkingReason(employeeId, dateStr, officeSetting
   return { blocked: false };
 }
 
-function validateGps(body, officeSetting) {
+/**
+ * Multi-branch: uses this employee's assigned office (employee_office)
+ * for geofence validation if one exists, else falls back to the
+ * default/first office_setting row (unassigned employees keep working
+ * exactly as before this feature existed).
+ */
+async function resolveGeofenceOffice(employeeId, defaultOfficeSetting) {
+  const assigned = await officeModel.getAssignedOfficeSetting(employeeId);
+  return assigned || defaultOfficeSetting;
+}
+
+function validateGpsShape(body, defaultOfficeSetting) {
   const { latitude, longitude, accuracy } = body;
 
   if (latitude == null || longitude == null) {
@@ -54,22 +68,74 @@ function validateGps(body, officeSetting) {
   if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
     throw createError("VALIDATION_ERROR", 422, "Invalid GPS coordinates.");
   }
-  if (accuracy != null && accuracy > officeSetting.max_gps_accuracy) {
+  // accuracy threshold is a device/GPS-quality setting, kept on the
+  // default office row regardless of which location (office or WFH) matches
+  if (accuracy != null && accuracy > defaultOfficeSetting.max_gps_accuracy) {
     throw createError("GPS_ACCURACY_LOW", 422, "GPS accuracy is below the required threshold.");
   }
+}
 
-  const distance = haversineDistanceMeters(
+/**
+ * Check-in: tries the office geofence first, then the employee's own
+ * WFH geofence (if configured and ACTIVE). Whichever matches becomes
+ * this attendance row's location_type - checkout later is locked to it.
+ */
+async function resolveCheckInLocation(employeeId, body, defaultOfficeSetting) {
+  validateGpsShape(body, defaultOfficeSetting);
+  const { latitude, longitude } = body;
+
+  const officeSetting = await resolveGeofenceOffice(employeeId, defaultOfficeSetting);
+  const officeDistance = haversineDistanceMeters(
     latitude,
     longitude,
     officeSetting.latitude,
     officeSetting.longitude
   );
+  if (officeDistance <= officeSetting.allowed_radius) {
+    return "OFFICE";
+  }
+
+  const wfhLocation = await wfhModel.findActiveWfhLocation(employeeId);
+  if (wfhLocation) {
+    const wfhDistance = haversineDistanceMeters(latitude, longitude, wfhLocation.latitude, wfhLocation.longitude);
+    if (wfhDistance <= wfhLocation.radius_meters) {
+      return "WFH";
+    }
+  }
+
+  throw createError("OUTSIDE_AUTHORIZED_LOCATION", 403, "You are outside your authorized attendance location.");
+}
+
+/**
+ * Check-out: validated against the SAME location_type recorded at
+ * check-in - not "anywhere authorized". A WFH check-in must check out
+ * from the same WFH location; an office check-in must check out from
+ * the (assigned) office.
+ */
+async function validateCheckOutLocation(employeeId, body, locationType, defaultOfficeSetting) {
+  validateGpsShape(body, defaultOfficeSetting);
+  const { latitude, longitude } = body;
+
+  if (locationType === "WFH") {
+    const wfhLocation = await wfhModel.findActiveWfhLocation(employeeId);
+    if (!wfhLocation) {
+      throw createError("WFH_NOT_ENABLED", 403, "WFH location is no longer configured.");
+    }
+    const distance = haversineDistanceMeters(latitude, longitude, wfhLocation.latitude, wfhLocation.longitude);
+    if (distance > wfhLocation.radius_meters) {
+      throw createError(
+        "OUTSIDE_AUTHORIZED_LOCATION",
+        403,
+        "Checkout must be from the same WFH location you checked in from."
+      );
+    }
+    return;
+  }
+
+  const officeSetting = await resolveGeofenceOffice(employeeId, defaultOfficeSetting);
+  const distance = haversineDistanceMeters(latitude, longitude, officeSetting.latitude, officeSetting.longitude);
   if (distance > officeSetting.allowed_radius) {
-    throw createError(
-      "OUTSIDE_AUTHORIZED_LOCATION",
-      403,
-      "You are outside your authorized attendance location."
-    );
+    throw createError("OUTSIDE_AUTHORIZED_LOCATION", 403, "You are outside your authorized attendance location.");
   }
 }
 
@@ -107,7 +173,7 @@ export async function checkInService(employeeId, body) {
     throw createError("ALREADY_CHECKED_IN", 409, "Attendance already recorded for today.");
   }
 
-  validateGps(body, officeSetting);
+  const locationType = await resolveCheckInLocation(employeeId, body, officeSetting);
 
   const expectedLoginUtc = istDateTimeToUtcDate(attendanceDate, employee.expected_login_time);
   const lateMinutes = Math.max(0, diffInMinutes(now, expectedLoginUtc));
@@ -123,6 +189,7 @@ export async function checkInService(employeeId, body) {
     longitude: body.longitude,
     accuracy: body.accuracy ?? null,
     device_id,
+    location_type: locationType,
   };
 
   let attendanceId;
@@ -151,30 +218,16 @@ export async function checkOutService(employeeId, body) {
   const attendanceDate = getISTDateString(new Date());
   const existing = await attendanceModel.findAttendanceByEmployeeDate(employeeId, attendanceDate);
 
-  // if (!existing || existing.status !== "CHECKED_IN") {
-  //   throw createError("CHECKIN_REQUIRED", 409, "No open check-in found for today.");
-  // }
-  // ============================================================================
-  // [CHANGE 1]: Check add kiya gaya hai ki check-in status ke sath actual_check_in
-  // value DB record me maujood hai ya nahi
-  // ============================================================================
-  if (!existing || existing.status !== "CHECKED_IN" || !existing.actual_check_in) {
+  if (!existing || existing.status !== "CHECKED_IN") {
     throw createError("CHECKIN_REQUIRED", 409, "No open check-in found for today.");
   }
 
-  validateGps(body, officeSetting);
+  await validateCheckOutLocation(employeeId, body, existing.location_type, officeSetting);
 
   const now = new Date();
   const expectedLogoutUtc = istDateTimeToUtcDate(attendanceDate, existing.expected_logout_time);
   const earlyMinutes = Math.max(0, diffInMinutes(expectedLogoutUtc, now));
-  // const checkInUtc = parseDbDatetimeUtc(existing.actual_check_in);
-  // ============================================================================
-  // [CHANGE 2]: Safe parseDbDatetimeUtc call + parse fail hone par structured error handling
-  // ============================================================================
   const checkInUtc = parseDbDatetimeUtc(existing.actual_check_in);
-  if (!checkInUtc) {
-    throw createError("VALIDATION_ERROR", 500, "Unable to calculate checkout: invalid check-in timestamp.");
-  }
   const workedMinutes = Math.max(0, diffInMinutes(now, checkInUtc));
 
   await attendanceModel.updateCheckOut(existing.attendance_id, {
@@ -219,63 +272,60 @@ export async function historyService(employeeId, query) {
   return { items: rows, pagination: { page, limit, total, total_pages: Math.ceil(total / limit) } };
 }
 
-function weekdayAbbrevForDateString(dateStr) {
-  const days = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
-  return days[new Date(`${dateStr}T00:00:00Z`).getUTCDay()];
-}
-
 /**
- * Aggregated from attendance rows already stored by the midnight cron
- * (present/absent/leave/holiday are all row statuses, not recomputed).
- * Weekend days are computed from the calendar since weekend rows are
- * never stored (derived-only, same as everywhere else in this app).
+ * Metrics per spec section 52. Weekend/working days are computed by
+ * walking the calendar (weekend rows are never stored - see
+ * resolveNonWorkingReason), everything else comes from stored attendance
+ * rows for the month.
  */
 export async function monthlySummaryService(employeeId, query) {
   const now = new Date();
-  const year = parseInt(query.year, 10) || now.getFullYear();
-  const month = parseInt(query.month, 10) || now.getMonth() + 1; // 1-12
+  const todayIST = getISTDateString(now);
+  const [todayYear, todayMonth] = todayIST.split("-").map(Number);
 
+  const year = parseInt(query.year, 10) || todayYear;
+  const month = parseInt(query.month, 10) || todayMonth;
   if (month < 1 || month > 12) {
     throw createError("VALIDATION_ERROR", 422, "month must be between 1 and 12.");
   }
 
-  const mm = String(month).padStart(2, "0");
+  const pad = (n) => String(n).padStart(2, "0");
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const startDate = `${year}-${mm}-01`;
-  const endDate = `${year}-${mm}-${String(daysInMonth).padStart(2, "0")}`;
+  const startDate = `${year}-${pad(month)}-01`;
+  const endDate = `${year}-${pad(month)}-${pad(daysInMonth)}`;
 
   const officeSetting = await attendanceModel.getOfficeSetting();
-  const weeklyOffDays = officeSetting?.weekly_off ? officeSetting.weekly_off.split(",") : ["SUN"];
+  const weeklyOff = officeSetting?.weekly_off ? officeSetting.weekly_off.split(",") : [];
 
   let weekendDays = 0;
   for (let d = 1; d <= daysInMonth; d++) {
-    const dateStr = `${year}-${mm}-${String(d).padStart(2, "0")}`;
-    if (weeklyOffDays.includes(weekdayAbbrevForDateString(dateStr))) weekendDays++;
+    const dateStr = `${year}-${pad(month)}-${pad(d)}`;
+    if (weeklyOff.includes(getWeekdayAbbrevForDateString(dateStr))) weekendDays++;
   }
 
-  const agg = await attendanceModel.getMonthlyAggregate(employeeId, startDate, endDate);
+  const agg = await attendanceModel.getMonthlyAggregate(employeeId, startDate, endDate, todayIST);
 
-  const fullHolidayDays = Number(agg.full_holiday_days) || 0;
-  const halfHolidayDays = Number(agg.half_holiday_days) || 0;
-  const leaveDays = (Number(agg.full_leave_days) || 0) + (Number(agg.half_leave_days) || 0) * 0.5;
-  const totalWorkedMinutes = Number(agg.total_worked_minutes) || 0;
+  const leaveDays = Number(agg.full_leave_days) + Number(agg.half_leave_days) * 0.5;
+  const holidayDays = Number(agg.full_holiday_days) + Number(agg.half_holiday_days) * 0.5;
+  const absentDays = Number(agg.missed_days) + Number(agg.override_absent_days);
+  const workingDays = daysInMonth - weekendDays - Number(agg.full_holiday_days);
+  const totalWorkedMinutes = Number(agg.total_worked_minutes);
 
   return {
     year,
     month,
-    working_days: daysInMonth - weekendDays - fullHolidayDays,
-    present_days: Number(agg.present_days) || 0,
-    absent_days: Number(agg.absent_days) || 0,
+    working_days: workingDays,
+    present_days: Number(agg.present_days),
+    absent_days: absentDays,
     leave_days: leaveDays,
     weekend_days: weekendDays,
-    holiday_days: fullHolidayDays,
-    half_day_holiday_days: halfHolidayDays,
-    late_count: Number(agg.late_count) || 0,
-    total_late_minutes: Number(agg.total_late_minutes) || 0,
-    early_count: Number(agg.early_count) || 0,
-    total_early_minutes: Number(agg.total_early_minutes) || 0,
-    worked_hours: Math.floor(totalWorkedMinutes / 60),
-    worked_minutes_remainder: totalWorkedMinutes % 60,
+    holiday_days: holidayDays,
+    late_count: Number(agg.late_count),
+    total_late_minutes: Number(agg.total_late_minutes),
+    early_count: Number(agg.early_count),
+    total_early_minutes: Number(agg.total_early_minutes),
+    worked_hours: `${Math.floor(totalWorkedMinutes / 60)}h ${totalWorkedMinutes % 60}m`,
+    total_worked_minutes: totalWorkedMinutes,
   };
 }
 

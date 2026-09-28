@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import * as employeeModel from "./employee.model.js";
+import * as officeModel from "../office/office.model.js";
 import { createError } from "../../utils/createError.js";
 
 const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/; // HH:MM, 24h
@@ -24,12 +25,18 @@ export async function createEmployeeService(body) {
     expected_login_time,
     expected_logout_time,
     late_grace_minutes,
+    office_setting_id, // optional - which branch this employee belongs to
   } = body;
 
   if (!employee_code || !name || !email || !password || !expected_login_time || !expected_logout_time) {
     throw createError("VALIDATION_ERROR", 422, "Required employee fields are missing.");
   }
   validateTimingFields({ expected_login_time, expected_logout_time });
+
+  if (office_setting_id) {
+    const office = await officeModel.findOfficeById(office_setting_id);
+    if (!office) throw createError("OFFICE_NOT_FOUND", 404, "Office not found.");
+  }
 
   const [emailExists, codeExists] = await Promise.all([
     employeeModel.findEmployeeByEmail(email),
@@ -54,6 +61,10 @@ export async function createEmployeeService(body) {
     expected_logout_time,
     late_grace_minutes,
   });
+
+  if (office_setting_id) {
+    await officeModel.upsertAssignment(employeeId, office_setting_id);
+  }
 
   return employeeModel.findEmployeeById(employeeId);
 }
