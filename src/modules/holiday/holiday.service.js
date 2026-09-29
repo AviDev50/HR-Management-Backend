@@ -1,5 +1,6 @@
 import * as holidayModel from "./holiday.model.js";
 import { createError } from "../../utils/createError.js";
+import { notifyHolidayAnnouncement } from "../notification/notification.service.js";
 
 function validateHolidayInput({ holiday_date, name, holiday_type, half_day_period }) {
   if (!holiday_date || !name || !holiday_type) {
@@ -29,9 +30,10 @@ export async function createHolidayService(body) {
   }
 
   const id = await holidayModel.createHoliday(body);
-  return holidayModel.findHolidayById(id);
+  const holiday = await holidayModel.findHolidayById(id);
+  notifyHolidayAnnouncement(holiday).catch(console.error); // fire-and-forget
+  return holiday;
 }
-
 export async function updateHolidayService(id, body) {
   const holiday = await holidayModel.findHolidayById(id);
   if (!holiday) throw createError("HOLIDAY_NOT_FOUND", 404, "Holiday not found.");

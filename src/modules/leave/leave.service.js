@@ -1,5 +1,6 @@
 import * as leaveModel from "./leave.model.js";
 import { createError } from "../../utils/createError.js";
+import { notifyLeaveDecision } from "../notification/notification.service.js";
 
 function daysBetweenInclusive(startDate, endDate) {
   const start = new Date(`${startDate}T00:00:00Z`);
@@ -210,11 +211,15 @@ export async function cancelLeaveRequestService(id, employeeId) {
 }
 
 export async function approveLeaveRequestService(id, adminId) {
-  await leaveModel.approveLeaveRequest(id, adminId);
-  return leaveModel.findLeaveRequestById(id);
+  await leaveModel.approveLeaveRequest(id, adminId);          // transaction yahin commit ho chuka
+  const request = await leaveModel.findLeaveRequestById(id);
+  notifyLeaveDecision(request, "APPROVED").catch(console.error);   // await nahi, fire-and-forget
+  return request;
 }
 
 export async function rejectLeaveRequestService(id, adminId, reason) {
   await leaveModel.rejectLeaveRequest(id, adminId, reason);
-  return leaveModel.findLeaveRequestById(id);
+  const request = await leaveModel.findLeaveRequestById(id);
+  notifyLeaveDecision(request, "REJECTED", request.rejection_reason).catch(console.error);
+  return request;
 }
