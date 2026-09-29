@@ -39,7 +39,8 @@ export async function requireAuth(req, res, next) {
     }
   }
 
-  req.user = { id: payload.id, role: payload.role };
+  // req.user = { id: payload.id, role: payload.role };
+  req.user = { id: payload.id, role: payload.role, device_id: payload.device_id };
   next();
 }
 
