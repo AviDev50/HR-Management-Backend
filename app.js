@@ -9,6 +9,7 @@ import holidayRoutes from "./src/modules/holiday/holiday.routes.js";
 import reportRoutes from "./src/modules/report/report.routes.js"
 import officeRoutes from "./src/modules/office/office.routes.js";
 import wfhRoutes from "./src/modules/wfh/wfh.routes.js";
+import dashboardRoutes from "./src/modules/dashboard/dashboard.routes.js";
 import { errorHandler } from "./src/middlewares/errorHandler.js";
 
 const app = express();
@@ -28,6 +29,7 @@ app.use("/api", holidayRoutes);
 app.use("/api", reportRoutes);
 app.use("/api", officeRoutes);
 app.use("/api", wfhRoutes);
+app.use("/api", dashboardRoutes);
 
 // must be registered LAST, after all routes
 app.use(errorHandler);
