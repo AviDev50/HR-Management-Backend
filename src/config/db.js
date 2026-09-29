@@ -7,8 +7,16 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
 
   waitForConnections: true,
-  connectionLimit: 10,   // max connections
-  queueLimit: 0
+  connectionLimit: 10,
+  queueLimit: 0,
+
+  timezone: "+05:30",          // IST, driver isi ke hisaab se Date parse/serialize karega
+  dateStrings: ["DATE"],       // DATE columns ko 'YYYY-MM-DD' string hi return karo
+});
+
+// Har connection ka session timezone bhi same rakhenge yaha (NOW(), CURRENT_TIMESTAMP ke liye)
+pool.pool.on("connection", (conn) => {
+  conn.query("SET time_zone = '+05:30'");
 });
 
 export default pool;
