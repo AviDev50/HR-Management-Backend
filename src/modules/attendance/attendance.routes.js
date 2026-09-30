@@ -35,4 +35,11 @@ router.delete(
   attendanceController.removeOverride
 );
 
+router.get(
+  "/admin/attendance/suspicious-attempts",
+  requireAuth,
+  requireRole("ADMIN"),
+  attendanceController.listSuspiciousAttempts
+);
+
 export default router;

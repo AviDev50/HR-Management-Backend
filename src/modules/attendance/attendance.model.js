@@ -159,11 +159,12 @@ export async function listAttendanceHistory(employeeId, { from, to, limit, offse
  * for dates already in the past are treated as absent (never checked in
  * and the day is over) - computed here via the `todayIST` cutoff rather
  * than stored as ABSENT, since no end-of-day cron flips that status yet.
+ * SUM(CASE WHEN status IN ('CHECKED_IN','CHECKED_OUT') THEN 1 ELSE 0 END) AS present_days,
  */
 export async function getMonthlyAggregate(employeeId, startDate, endDate, todayIST) {
   const [rows] = await pool.query(
     `SELECT
-       SUM(CASE WHEN status IN ('CHECKED_IN','CHECKED_OUT') THEN 1 ELSE 0 END) AS present_days,
+       SUM(CASE WHEN status IN ('CHECKED_IN','CHECKED_OUT','MISSING_CHECKOUT') THEN 1 ELSE 0 END) AS present_days,
        SUM(CASE WHEN status = 'ABSENT' THEN 1 ELSE 0 END) AS override_absent_days,
        SUM(CASE WHEN status = 'NOT_CHECKED_IN' AND attendance_date < ? THEN 1 ELSE 0 END) AS missed_days,
        SUM(CASE WHEN status = 'ON_LEAVE' THEN 1 ELSE 0 END) AS full_leave_days,
@@ -211,16 +212,50 @@ export async function listCheckedInRowsByDate(date) {
   return rows;
 }
 
-export async function autoCheckoutRow(attendanceId, data) {
-  await pool.query(
-    `UPDATE attendance
-     SET status = 'CHECKED_OUT', actual_check_out = ?, early_checkout_minutes = ?, worked_minutes = ?, is_auto_checkout = TRUE
-     WHERE attendance_id = ?`,
-    [data.actual_check_out, data.early_checkout_minutes, data.worked_minutes, attendanceId]
-  );
-}
+// export async function autoCheckoutRow(attendanceId, data) {
+//   await pool.query(
+//     `UPDATE attendance
+//      SET status = 'CHECKED_OUT', actual_check_out = ?, early_checkout_minutes = ?, worked_minutes = ?, is_auto_checkout = TRUE
+//      WHERE attendance_id = ?`,
+//     [data.actual_check_out, data.early_checkout_minutes, data.worked_minutes, attendanceId]
+//   );
+// }
 
 // ---- attendance_status_override (admin manual exceptions) ----
+
+// replace existing autoCheckoutRow
+export async function autoCheckoutRow(attendanceId, data) {
+  const [result] = await pool.query(
+    `UPDATE attendance
+     SET status = 'MISSING_CHECKOUT', actual_check_out = ?, early_checkout_minutes = ?,
+         worked_minutes = ?, is_auto_checkout = TRUE
+     WHERE attendance_id = ? AND status = 'CHECKED_IN' AND deleted_at IS NULL`,
+    [data.actual_check_out, data.early_checkout_minutes, data.worked_minutes, attendanceId]
+  );
+  return result.affectedRows; // 0 = employee ne beech mein khud checkout kar diya
+}
+
+// naya: aaj tak ke saare open CHECKED_IN rows
+export async function listOpenCheckedInRows(uptoDate) {
+  const [rows] = await pool.query(
+    `SELECT attendance_id, DATE_FORMAT(attendance_date, '%Y-%m-%d') AS attendance_date,
+            expected_logout_time, actual_check_in
+     FROM attendance
+     WHERE status = 'CHECKED_IN' AND attendance_date <= ? AND deleted_at IS NULL`,
+    [uptoDate]
+  );
+  return rows;
+}
+
+// naya: beeti hui dates ke NOT_CHECKED_IN rows -> ABSENT
+export async function markAbsentBeforeDate(date) {
+  const [result] = await pool.query(
+    `UPDATE attendance SET status = 'ABSENT'
+     WHERE status = 'NOT_CHECKED_IN' AND attendance_date < ? AND deleted_at IS NULL`,
+    [date]
+  );
+  return result.affectedRows;
+}
 
 export async function findOverrideById(id) {
   const [rows] = await pool.query(
@@ -333,4 +368,55 @@ export async function sumApprovedLeaveDays(employeeId, fromDate, toDate) {
     [employeeId, toDate, fromDate]
   );
   return rows[0].total;
+}
+
+// ---- suspicious attempts (fake GPS / GPS anomalies) ----
+
+export async function insertSuspiciousAttempt(d) {
+  await pool.query(
+    `INSERT INTO suspicious_attempt
+       (employee_id, action, type, is_blocked, latitude, longitude, accuracy,
+        device_id, location_timestamp, attendance_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      d.employee_id, d.action, d.type, d.is_blocked,
+      d.latitude, d.longitude, d.accuracy,
+      d.device_id, d.location_timestamp, d.attendance_date,
+    ]
+  );
+}
+
+export async function getRecentCheckInAccuracies(employeeId, limit) {
+  const [rows] = await pool.query(
+    `SELECT check_in_accuracy FROM attendance
+     WHERE employee_id = ? AND check_in_accuracy IS NOT NULL AND deleted_at IS NULL
+     ORDER BY attendance_date DESC LIMIT ?`,
+    [employeeId, limit]
+  );
+  return rows.map((r) => r.check_in_accuracy);
+}
+
+export async function listSuspiciousAttempts({ employeeId, type, from, to, limit, offset }) {
+  const conditions = ["sa.deleted_at IS NULL"];
+  const params = [];
+  if (employeeId) { conditions.push("sa.employee_id = ?"); params.push(employeeId); }
+  if (type) { conditions.push("sa.type = ?"); params.push(type); }
+  if (from) { conditions.push("sa.attendance_date >= ?"); params.push(from); }
+  if (to) { conditions.push("sa.attendance_date <= ?"); params.push(to); }
+  const where = conditions.join(" AND ");
+
+  const [rows] = await pool.query(
+    `SELECT sa.*, e.employee_code, e.name AS employee_name
+     FROM suspicious_attempt sa
+     JOIN employee e ON e.employee_id = sa.employee_id
+     WHERE ${where}
+     ORDER BY sa.created_at DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+  const [countRows] = await pool.query(
+    `SELECT COUNT(*) AS total FROM suspicious_attempt sa WHERE ${where}`,
+    params
+  );
+  return { rows, total: countRows[0].total };
 }

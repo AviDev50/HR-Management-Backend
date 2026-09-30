@@ -33,10 +33,12 @@ export async function getMonthlyReport({ employeeId, startDate, endDate }) {
   }
   const where = conditions.join(" AND ");
 
+    //  SUM(CASE WHEN a.status IN ('CHECKED_IN','CHECKED_OUT') THEN 1 ELSE 0 END) AS present_days,
+
   const [rows] = await pool.query(
     `SELECT
        a.employee_id, e.employee_code, e.name AS employee_name,
-       SUM(CASE WHEN a.status IN ('CHECKED_IN','CHECKED_OUT') THEN 1 ELSE 0 END) AS present_days,
+       SUM(CASE WHEN a.status IN ('CHECKED_IN','CHECKED_OUT','MISSING_CHECKOUT') THEN 1 ELSE 0 END) AS present_days,
        SUM(CASE WHEN a.status = 'ABSENT' THEN 1 ELSE 0 END) AS override_absent_days,
        SUM(CASE WHEN a.status = 'NOT_CHECKED_IN' AND a.attendance_date < CURDATE() THEN 1 ELSE 0 END) AS missed_days,
        SUM(CASE WHEN a.status = 'ON_LEAVE' THEN 1 ELSE 0 END) AS full_leave_days,

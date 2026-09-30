@@ -10,30 +10,40 @@ import {
 } from "../utils/time.js";
 
 /**
- * Employee forgot to check out yesterday -> auto-fill checkout at
- * expected_logout_time, flagged with is_auto_checkout = true.
- * (Option A, per project decision: fill with expected_logout_time,
- * not "no checkout at all".)
+ * Raat 12: kal (ya usse pehle) ke open CHECKED_IN rows -> MISSING_CHECKOUT.
+ * actual_check_out = expected_logout_time, worked_minutes = check-in se
+ * expected logout tak. is_auto_checkout = true.
  */
-async function autoCheckoutYesterday() {
+async function markMissingCheckouts() {
   const todayIST = getISTDateString(new Date());
   const yesterdayIST = addDaysToDateString(todayIST, -1);
 
-  const openRows = await attendanceModel.listCheckedInRowsByDate(yesterdayIST);
+  const rows = await attendanceModel.listOpenCheckedInRows(yesterdayIST); // date <= yesterday
+  let updated = 0;
 
-  for (const row of openRows) {
-    const expectedLogoutUtc = istDateTimeToUtcDate(yesterdayIST, row.expected_logout_time);
+  for (const row of rows) {
+    const expectedLogoutUtc = istDateTimeToUtcDate(row.attendance_date, row.expected_logout_time);
     const checkInUtc = parseDbDatetimeUtc(row.actual_check_in);
     const workedMinutes = Math.max(0, diffInMinutes(expectedLogoutUtc, checkInUtc));
 
-    await attendanceModel.autoCheckoutRow(row.attendance_id, {
+    const affected = await attendanceModel.autoCheckoutRow(row.attendance_id, {
       actual_check_out: expectedLogoutUtc,
-      early_checkout_minutes: 0, // filled exactly at expected logout - not "early" by definition
+      early_checkout_minutes: 0,
       worked_minutes: workedMinutes,
     });
+    updated += affected;
   }
 
-  console.log(`[cron] auto-checkout: processed ${openRows.length} open row(s) for ${yesterdayIST}`);
+  console.log(`[cron] missing-checkout: marked ${updated} row(s) up to ${yesterdayIST}`);
+}
+
+/**
+ * Beeti dates ke NOT_CHECKED_IN rows (na check-in, na check-out) -> ABSENT.
+ */
+async function markAbsentRows() {
+  const todayIST = getISTDateString(new Date());
+  const absent = await attendanceModel.markAbsentBeforeDate(todayIST);
+  console.log(`[cron] absent: marked ${absent} row(s) before ${todayIST}`);
 }
 
 /**
@@ -76,14 +86,20 @@ async function preCreateTodayRows() {
   console.log(`[cron] pre-create: created ${created} row(s) for ${todayIST}`);
 }
 
+/** Raat 12 ka poora flow: MISSING_CHECKOUT -> ABSENT -> aaj ki rows pre-create */
+async function midnightJob() {
+  await markMissingCheckouts();
+  await markAbsentRows();
+  await preCreateTodayRows();
+}
+
 /** Call once from server.js after the app starts. */
 export function scheduleAttendanceCron() {
   cron.schedule(
-    "0 0 * * *", // every day at 00:00
+    "0 0 * * *", // every day at 00:00 IST
     async () => {
       try {
-        await autoCheckoutYesterday();
-        await preCreateTodayRows();
+        await midnightJob();
       } catch (err) {
         console.error("[cron] attendance midnight job failed:", err);
       }

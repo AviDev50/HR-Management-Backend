@@ -42,3 +42,8 @@ export const removeOverride = asyncHandler(async (req, res) => {
   await attendanceService.removeOverrideService(req.params.id);
   res.status(200).json({ success: true, message: "Override removed" });
 });
+
+export const listSuspiciousAttempts = asyncHandler(async (req, res) => {
+  const result = await attendanceService.listSuspiciousAttemptsService(req.query);
+  res.status(200).json({ success: true, data: result });
+});
