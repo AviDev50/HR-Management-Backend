@@ -1,5 +1,5 @@
 import * as reportModel from "./report.model.js";
-import { getISTDateString, getWeekdayAbbrevForDateString } from "../../utils/time.js";
+import { getISTDateString, getWeekdayAbbrevForDateString, addDaysToDateString } from "../../utils/time.js";
 import { createError } from "../../utils/createError.js";
 
 function resolveMonthRange(query) {
@@ -30,6 +30,47 @@ async function countWeekendDays(year, month, daysInMonth) {
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${year}-${pad(month)}-${pad(d)}`;
     if (weeklyOff.includes(getWeekdayAbbrevForDateString(dateStr))) count++;
+  }
+  return count;
+}
+
+const MAX_EXPORT_DAYS = 366;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function resolveExportRange(query) {
+  // no range given -> fall back to old month/year behaviour
+  if (!query.from_date && !query.to_date) {
+    const { startDate, endDate, year, month } = resolveMonthRange(query);
+    return { startDate, endDate, year, month };
+  }
+
+  const startDate = query.from_date;
+  const endDate = query.to_date;
+
+  if (!startDate || !endDate || !DATE_RE.test(startDate) || !DATE_RE.test(endDate)) {
+    throw createError("VALIDATION_ERROR", 422, "from_date and to_date are required in YYYY-MM-DD format.");
+  }
+  if (Number.isNaN(Date.parse(startDate)) || Number.isNaN(Date.parse(endDate))) {
+    throw createError("VALIDATION_ERROR", 422, "Invalid date.");
+  }
+  if (startDate > endDate) {
+    throw createError("VALIDATION_ERROR", 422, "from_date cannot be after to_date.");
+  }
+  const totalDays = (Date.parse(endDate) - Date.parse(startDate)) / 86400000 + 1;
+  if (totalDays > MAX_EXPORT_DAYS) {
+    throw createError("VALIDATION_ERROR", 422, `Date range cannot exceed ${MAX_EXPORT_DAYS} days.`);
+  }
+
+  return { startDate, endDate };
+}
+
+async function countWeekendDaysInRange(startDate, endDate) {
+  const officeSetting = await reportModel.getOfficeSetting();
+  const weeklyOff = officeSetting?.weekly_off ? officeSetting.weekly_off.split(",") : [];
+
+  let count = 0;
+  for (let d = startDate; d <= endDate; d = addDaysToDateString(d, 1)) {
+    if (weeklyOff.includes(getWeekdayAbbrevForDateString(d))) count++;
   }
   return count;
 }
@@ -124,14 +165,15 @@ export async function leaveReportService(query) {
 export async function exportMonthlyExcelService(query) {
   const ExcelJS = (await import("exceljs")).default;
 
-  const { year, month, startDate, endDate, daysInMonth } = resolveMonthRange(query);
-  const weekendDays = await countWeekendDays(year, month, daysInMonth);
+  const { startDate, endDate } = resolveExportRange(query);
+  const totalDays = (Date.parse(endDate) - Date.parse(startDate)) / 86400000 + 1;
+  const weekendDays = await countWeekendDaysInRange(startDate, endDate);
   const fullHolidayDays = await reportModel.countFullDayHolidays(startDate, endDate);
-  const workingDays = daysInMonth - weekendDays - fullHolidayDays;
+  const workingDays = totalDays - weekendDays - fullHolidayDays;
 
   const [monthlyRows, dailyRows, lateRows, leaveRows] = await Promise.all([
     reportModel.getMonthlyReport({ startDate, endDate }),
-    reportModel.getDailyReportAll(query.date || startDate),
+    reportModel.getDailyReportAll(startDate, endDate), // was: single date
     reportModel.getLateReportAll(startDate, endDate),
     reportModel.getLeaveReportAll(startDate, endDate),
   ]);
@@ -194,6 +236,6 @@ export async function exportMonthlyExcelService(query) {
   leaveSheet.addRows(leaveRows);
 
   const buffer = await workbook.xlsx.writeBuffer();
-  const filename = `attendance-report-${year}-${String(month).padStart(2, "0")}.xlsx`;
+  const filename = `attendance-report-${startDate}-to-${endDate}.xlsx`;
   return { buffer, filename };
 }

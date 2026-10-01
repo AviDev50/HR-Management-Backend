@@ -142,16 +142,16 @@ export async function getLeaveReport({ employeeId, status, from, to, limit, offs
 
 // ---- unpaginated variants, used only by the Excel export ----
 
-export async function getDailyReportAll(date) {
+export async function getDailyReportAll(startDate, endDate) {
   const [rows] = await pool.query(
     `SELECT e.employee_code, e.name AS employee_name, a.attendance_date, a.status,
             a.expected_login_time, a.expected_logout_time, a.actual_check_in, a.actual_check_out,
             a.late_minutes, a.early_checkout_minutes, a.worked_minutes, a.is_auto_checkout
      FROM attendance a
      JOIN employee e ON e.employee_id = a.employee_id AND e.deleted_at IS NULL
-     WHERE a.attendance_date = ? AND a.deleted_at IS NULL
-     ORDER BY e.name ASC`,
-    [date]
+     WHERE a.attendance_date BETWEEN ? AND ? AND a.deleted_at IS NULL
+     ORDER BY a.attendance_date ASC, e.name ASC`,
+    [startDate, endDate]
   );
   return rows;
 }
