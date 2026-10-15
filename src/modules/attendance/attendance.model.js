@@ -69,47 +69,79 @@ export async function findAttendanceById(id) {
   return rows[0] || null;
 }
 
+// export async function createCheckInRow(data) {
+//   const [result] = await pool.query(
+//     `INSERT INTO attendance
+//        (employee_id, attendance_date, status, expected_login_time, expected_logout_time,
+//         actual_check_in, late_minutes, check_in_latitude, check_in_longitude, check_in_accuracy,
+//         device_id, location_type)
+//      VALUES (?, ?, 'CHECKED_IN', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+//     [
+//       data.employee_id,
+//       data.attendance_date,
+//       data.expected_login_time,
+//       data.expected_logout_time,
+//       data.actual_check_in,
+//       data.late_minutes,
+//       data.latitude,
+//       data.longitude,
+//       data.accuracy,
+//       data.device_id,
+//       data.location_type,
+//     ]
+//   );
+//   return result.insertId;
+// }
+
+// // used when a NOT_CHECKED_IN row already exists (e.g. pre-created by the
+// // midnight cron - see spec comment on the attendance table)
+// export async function updateExistingRowToCheckIn(attendanceId, data) {
+//   await pool.query(
+//     `UPDATE attendance
+//      SET status = 'CHECKED_IN', actual_check_in = ?, late_minutes = ?,
+//          check_in_latitude = ?, check_in_longitude = ?, check_in_accuracy = ?, device_id = ?,
+//          location_type = ?
+//      WHERE attendance_id = ?`,
+//     [
+//       data.actual_check_in,
+//       data.late_minutes,
+//       data.latitude,
+//       data.longitude,
+//       data.accuracy,
+//       data.device_id,
+//       data.location_type,
+//       attendanceId,
+//     ]
+//   );
+// }
+
+
 export async function createCheckInRow(data) {
   const [result] = await pool.query(
     `INSERT INTO attendance
        (employee_id, attendance_date, status, expected_login_time, expected_logout_time,
-        actual_check_in, late_minutes, check_in_latitude, check_in_longitude, check_in_accuracy,
-        device_id, location_type)
-     VALUES (?, ?, 'CHECKED_IN', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        actual_check_in, late_minutes, early_checkin_minutes, check_in_latitude, check_in_longitude,
+        check_in_accuracy, device_id, location_type)
+     VALUES (?, ?, 'CHECKED_IN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      data.employee_id,
-      data.attendance_date,
-      data.expected_login_time,
-      data.expected_logout_time,
-      data.actual_check_in,
-      data.late_minutes,
-      data.latitude,
-      data.longitude,
-      data.accuracy,
-      data.device_id,
-      data.location_type,
+      data.employee_id, data.attendance_date, data.expected_login_time, data.expected_logout_time,
+      data.actual_check_in, data.late_minutes, data.early_checkin_minutes,
+      data.latitude, data.longitude, data.accuracy, data.device_id, data.location_type,
     ]
   );
   return result.insertId;
 }
 
-// used when a NOT_CHECKED_IN row already exists (e.g. pre-created by the
-// midnight cron - see spec comment on the attendance table)
 export async function updateExistingRowToCheckIn(attendanceId, data) {
   await pool.query(
     `UPDATE attendance
-     SET status = 'CHECKED_IN', actual_check_in = ?, late_minutes = ?,
+     SET status = 'CHECKED_IN', actual_check_in = ?, late_minutes = ?, early_checkin_minutes = ?,
          check_in_latitude = ?, check_in_longitude = ?, check_in_accuracy = ?, device_id = ?,
          location_type = ?
      WHERE attendance_id = ?`,
     [
-      data.actual_check_in,
-      data.late_minutes,
-      data.latitude,
-      data.longitude,
-      data.accuracy,
-      data.device_id,
-      data.location_type,
+      data.actual_check_in, data.late_minutes, data.early_checkin_minutes,
+      data.latitude, data.longitude, data.accuracy, data.device_id, data.location_type,
       attendanceId,
     ]
   );
@@ -173,8 +205,10 @@ export async function getMonthlyAggregate(employeeId, startDate, endDate, todayI
        SUM(CASE WHEN status = 'HALF_DAY_HOLIDAY' THEN 1 ELSE 0 END) AS half_holiday_days,
        SUM(CASE WHEN late_minutes > 0 THEN 1 ELSE 0 END) AS late_count,
        COALESCE(SUM(late_minutes), 0) AS total_late_minutes,
-       SUM(CASE WHEN early_checkout_minutes > 0 THEN 1 ELSE 0 END) AS early_count,
-       COALESCE(SUM(early_checkout_minutes), 0) AS total_early_minutes,
+  SUM(CASE WHEN early_checkin_minutes > 0 THEN 1 ELSE 0 END) AS early_count,
+COALESCE(SUM(early_checkin_minutes), 0) AS total_early_minutes,
+SUM(CASE WHEN early_checkout_minutes > 0 THEN 1 ELSE 0 END) AS early_checkout_count,
+COALESCE(SUM(early_checkout_minutes), 0) AS total_early_checkout_minutes,
        COALESCE(SUM(worked_minutes), 0) AS total_worked_minutes
      FROM attendance
      WHERE employee_id = ? AND attendance_date BETWEEN ? AND ? AND deleted_at IS NULL`,
@@ -420,3 +454,4 @@ export async function listSuspiciousAttempts({ employeeId, type, from, to, limit
   );
   return { rows, total: countRows[0].total };
 }
+

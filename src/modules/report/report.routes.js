@@ -9,5 +9,7 @@ router.get("/admin/reports/monthly", requireAuth, requireRole("ADMIN"), reportCo
 router.get("/admin/reports/late", requireAuth, requireRole("ADMIN"), reportController.getLateReport);
 router.get("/admin/reports/leave", requireAuth, requireRole("ADMIN"), reportController.getLeaveReport);
 router.get("/admin/reports/export", requireAuth, requireRole("ADMIN"), reportController.exportExcel);
+router.get("/admin/reports/early", requireAuth, requireRole("ADMIN"), reportController.getEarlyReport);
+router.get("/admin/reports/export-matrix", requireAuth, requireRole("ADMIN"), reportController.exportMatrixExcel);
 
 export default router;

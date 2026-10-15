@@ -30,3 +30,15 @@ export const exportExcel = asyncHandler(async (req, res) => {
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.status(200).send(buffer);
 });
+
+export const getEarlyReport = asyncHandler(async (req, res) => {
+  const result = await reportService.earlyReportService(req.query);
+  res.status(200).json({ success: true, data: result });
+});
+
+export const exportMatrixExcel = asyncHandler(async (req, res) => {
+  const { buffer, filename } = await reportService.exportAttendanceMatrixService(req.query);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.status(200).send(buffer);
+});

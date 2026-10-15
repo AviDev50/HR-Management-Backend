@@ -47,8 +47,10 @@ export async function getMonthlyReport({ employeeId, startDate, endDate }) {
        SUM(CASE WHEN a.status = 'HALF_DAY_HOLIDAY' THEN 1 ELSE 0 END) AS half_holiday_days,
        SUM(CASE WHEN a.late_minutes > 0 THEN 1 ELSE 0 END) AS late_count,
        COALESCE(SUM(a.late_minutes), 0) AS total_late_minutes,
-       SUM(CASE WHEN a.early_checkout_minutes > 0 THEN 1 ELSE 0 END) AS early_count,
-       COALESCE(SUM(a.early_checkout_minutes), 0) AS total_early_minutes,
+SUM(CASE WHEN a.early_checkin_minutes > 0 THEN 1 ELSE 0 END) AS early_count,
+COALESCE(SUM(a.early_checkin_minutes), 0) AS total_early_minutes,
+SUM(CASE WHEN a.early_checkout_minutes > 0 THEN 1 ELSE 0 END) AS early_checkout_count,
+COALESCE(SUM(a.early_checkout_minutes), 0) AS total_early_checkout_minutes,
        COALESCE(SUM(a.worked_minutes), 0) AS total_worked_minutes
      FROM attendance a
      JOIN employee e ON e.employee_id = a.employee_id
@@ -146,7 +148,7 @@ export async function getDailyReportAll(startDate, endDate) {
   const [rows] = await pool.query(
     `SELECT e.employee_code, e.name AS employee_name, a.attendance_date, a.status,
             a.expected_login_time, a.expected_logout_time, a.actual_check_in, a.actual_check_out,
-            a.late_minutes, a.early_checkout_minutes, a.worked_minutes, a.is_auto_checkout
+            a.late_minutes,a.early_checkin_minutes, a.early_checkout_minutes, a.worked_minutes, a.is_auto_checkout
      FROM attendance a
      JOIN employee e ON e.employee_id = a.employee_id AND e.deleted_at IS NULL
      WHERE a.attendance_date BETWEEN ? AND ? AND a.deleted_at IS NULL
@@ -199,4 +201,59 @@ export async function countFullDayHolidays(startDate, endDate) {
     [startDate, endDate]
   );
   return rows[0].cnt;
+}
+
+// ---- Early arrival report ----
+export async function getEarlyReport({ employeeId, from, to, limit, offset }) {
+  const conditions = ["a.early_checkin_minutes > 0", "a.deleted_at IS NULL", "e.deleted_at IS NULL"];
+  const params = [];
+  if (employeeId) { conditions.push("a.employee_id = ?"); params.push(employeeId); }
+  if (from) { conditions.push("a.attendance_date >= ?"); params.push(from); }
+  if (to) { conditions.push("a.attendance_date <= ?"); params.push(to); }
+  const where = conditions.join(" AND ");
+
+  const [rows] = await pool.query(
+    `SELECT a.attendance_date, e.employee_code, e.name AS employee_name,
+            a.expected_login_time, a.actual_check_in, a.early_checkin_minutes
+     FROM attendance a
+     JOIN employee e ON e.employee_id = a.employee_id
+     WHERE ${where}
+     ORDER BY a.attendance_date DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+  const [countRows] = await pool.query(
+    `SELECT COUNT(*) AS total FROM attendance a JOIN employee e ON e.employee_id = a.employee_id WHERE ${where}`,
+    params
+  );
+  return { rows, total: countRows[0].total };
+}
+
+// ---- Attendance matrix export ----
+export async function listActiveEmployeesForMatrix() {
+  const [rows] = await pool.query(
+    `SELECT employee_id, employee_code, name, created_at
+     FROM employee WHERE status = 'ACTIVE' AND deleted_at IS NULL ORDER BY name ASC`
+  );
+  return rows;
+}
+
+export async function getAttendanceStatusesForRange(startDate, endDate) {
+  const [rows] = await pool.query(
+    `SELECT employee_id, DATE_FORMAT(attendance_date, '%Y-%m-%d') AS attendance_date, status
+     FROM attendance
+     WHERE attendance_date BETWEEN ? AND ? AND deleted_at IS NULL`,
+    [startDate, endDate]
+  );
+  return rows;
+}
+
+export async function listHolidaysInRange(startDate, endDate) {
+  const [rows] = await pool.query(
+    `SELECT DATE_FORMAT(holiday_date, '%Y-%m-%d') AS holiday_date, holiday_type
+     FROM holiday
+     WHERE holiday_date BETWEEN ? AND ? AND status = 'ACTIVE' AND deleted_at IS NULL`,
+    [startDate, endDate]
+  );
+  return rows;
 }

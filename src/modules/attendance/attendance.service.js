@@ -11,6 +11,7 @@ import {
   istDateTimeToUtcDate,
   parseDbDatetimeUtc,
   diffInMinutes,
+  formatMinutes
 } from "../../utils/time.js";
 
 /**
@@ -355,7 +356,10 @@ export async function checkInService(employeeId, body) {
     attendanceDate,
     employee.expected_login_time,
   );
-  const lateMinutes = Math.max(0, diffInMinutes(now, expectedLoginUtc));
+  // const lateMinutes = Math.max(0, diffInMinutes(now, expectedLoginUtc));
+  const diff = diffInMinutes(now, expectedLoginUtc);
+const lateMinutes = Math.max(0, diff);
+const earlyCheckinMinutes = Math.max(0, -diff);
 
   const rowData = {
     employee_id: employeeId,
@@ -369,6 +373,7 @@ export async function checkInService(employeeId, body) {
     accuracy: body.accuracy ?? null,
     device_id,
     location_type: locationType,
+    early_checkin_minutes: earlyCheckinMinutes,
   };
 
   let attendanceId;
@@ -553,12 +558,23 @@ export async function monthlySummaryService(employeeId, query) {
     leave_days: leaveDays,
     weekend_days: weekendDays,
     holiday_days: holidayDays,
+    // late_count: Number(agg.late_count),
+    // total_late_minutes: Number(agg.total_late_minutes),
+    // early_count: Number(agg.early_count),
+    // total_early_minutes: Number(agg.total_early_minutes),
+    // worked_hours: `${Math.floor(totalWorkedMinutes / 60)}h ${totalWorkedMinutes % 60}m`,
+    // total_worked_minutes: totalWorkedMinutes,
     late_count: Number(agg.late_count),
-    total_late_minutes: Number(agg.total_late_minutes),
-    early_count: Number(agg.early_count),
-    total_early_minutes: Number(agg.total_early_minutes),
-    worked_hours: `${Math.floor(totalWorkedMinutes / 60)}h ${totalWorkedMinutes % 60}m`,
-    total_worked_minutes: totalWorkedMinutes,
+total_late_minutes: Number(agg.total_late_minutes),
+late_display: formatMinutes(agg.total_late_minutes),
+early_count: Number(agg.early_count),
+total_early_minutes: Number(agg.total_early_minutes),
+early_display: formatMinutes(agg.total_early_minutes),
+early_checkout_count: Number(agg.early_checkout_count),
+total_early_checkout_minutes: Number(agg.total_early_checkout_minutes),
+early_checkout_display: formatMinutes(agg.total_early_checkout_minutes),
+worked_hours: formatMinutes(totalWorkedMinutes),
+total_worked_minutes: totalWorkedMinutes,
   };
 }
 
