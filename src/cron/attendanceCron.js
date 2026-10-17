@@ -87,7 +87,7 @@ async function preCreateTodayRows() {
 }
 
 /** Raat 12 ka poora flow: MISSING_CHECKOUT -> ABSENT -> aaj ki rows pre-create */
-async function midnightJob() {
+export async function midnightJob() {
   await markMissingCheckouts();
   await markAbsentRows();
   await preCreateTodayRows();
@@ -107,3 +107,11 @@ export function scheduleAttendanceCron() {
     { timezone: "Asia/Kolkata" }
   );
 }
+
+
+
+
+
+
+
+
